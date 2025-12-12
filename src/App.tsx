@@ -91,6 +91,12 @@ const App: React.FC = () => {
     const [newInstruction, setNewInstruction] = useState('');
     const importFileInputRef = useRef<HTMLInputElement>(null);
 
+    // Estados para procesamiento desde Drive
+    const [driveLink, setDriveLink] = useState<string>('');
+    const [isDriveProcessing, setIsDriveProcessing] = useState<boolean>(false);
+    const [driveAccessToken, setDriveAccessToken] = useState<string>('');
+    const [isConnectedToDrive, setIsConnectedToDrive] = useState<boolean>(false);
+
 
     useEffect(() => {
         try {
@@ -103,9 +109,143 @@ const App: React.FC = () => {
         }
     }, []);
 
+    // Verificar si hay token de Drive guardado
+    useEffect(() => {
+        const token = localStorage.getItem('drive_access_token');
+        if (token) {
+            setDriveAccessToken(token);
+            setIsConnectedToDrive(true);
+        }
+    }, []);
+
+    // Manejar callback de OAuth de Google
+    useEffect(() => {
+        const hash = window.location.hash;
+        if (hash && hash.includes('access_token')) {
+            const params = new URLSearchParams(hash.substring(1));
+            const token = params.get('access_token');
+
+            if (token) {
+                localStorage.setItem('drive_access_token', token);
+                setDriveAccessToken(token);
+                setIsConnectedToDrive(true);
+
+                // Limpiar hash de la URL
+                window.history.replaceState(null, '', window.location.pathname);
+                setStatus('Conectado exitosamente a Google Drive.');
+            }
+        }
+    }, []);
+
     const saveGlobalInstructions = (instructions: string[]) => {
         setGlobalInstructions(instructions);
         localStorage.setItem('globalInstructions', JSON.stringify(instructions));
+        localStorage.setItem('globalInstructions', JSON.stringify(instructions));
+    };
+
+    const handleConnectDrive = () => {
+        // Google OAuth 2.0 Configuration
+        const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+        const REDIRECT_URI = `${window.location.origin}/oauth-callback`;
+        const SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+        const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+            `client_id=${CLIENT_ID}&` +
+            `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
+            `response_type=token&` +
+            `scope=${encodeURIComponent(SCOPE)}&` +
+            `access_type=online`;
+
+        // Abrir ventana de autorización
+        window.location.href = authUrl;
+    };
+
+    const handleDisconnectDrive = () => {
+        localStorage.removeItem('drive_access_token');
+        setDriveAccessToken('');
+        setIsConnectedToDrive(false);
+        setStatus('Desconectado de Google Drive.');
+    };
+
+    const extractDriveFileId = (link: string): string | null => {
+        // Soporta múltiples formatos de links de Drive
+        const patterns = [
+            /\/file\/d\/([a-zA-Z0-9_-]+)/,
+            /id=([a-zA-Z0-9_-]+)/,
+            /^([a-zA-Z0-9_-]+)$/  // Solo ID
+        ];
+
+        for (const pattern of patterns) {
+            const match = link.match(pattern);
+            if (match && match[1]) {
+                return match[1];
+            }
+        }
+
+        return null;
+    };
+
+    const handleProcessFromDrive = async () => {
+        if (!driveLink) {
+            setStatus('Por favor, pega un link de Google Drive.');
+            return;
+        }
+
+        if (!isConnectedToDrive || !driveAccessToken) {
+            setStatus('Primero debes conectar tu Google Drive.');
+            return;
+        }
+
+        const fileId = extractDriveFileId(driveLink);
+
+        if (!fileId) {
+            setStatus('Link de Drive inválido. Asegúrate de pegar un link correcto.');
+            return;
+        }
+
+        setIsDriveProcessing(true);
+        setStatus(`Procesando archivo de Drive...`);
+        setTranscription('');
+        setGeneralSummary('');
+        setBusinessSummary('');
+
+        try {
+            // Llamar al backend
+            const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+
+            const response = await fetch(`${BACKEND_URL}/transcribe-from-drive`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    file_id: fileId,
+                    access_token: driveAccessToken,
+                    permanent_instructions: globalInstructions
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`Backend error: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+
+            // Mostrar resultados
+            setTranscription(data.transcription ?? "");
+            setGeneralSummary(data.general_summary ?? "");
+            setBusinessSummary(data.business_summary ?? "");
+
+            setStatus(`Procesamiento completo. Archivo guardado en tu Drive: ${data.txt_file_name}`);
+            setDriveLink(''); // Limpiar input
+
+        } catch (error) {
+            console.error('Drive processing error:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            setStatus(`Error procesando desde Drive: ${errorMessage}`);
+        } finally {
+            setIsDriveProcessing(false);
+        }
     };
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -456,6 +596,83 @@ ${businessSummary}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                     <h1 style={{ ...styles.header, marginBottom: 0, textAlign: 'left' }}>Transcriptor y Resumidor</h1>
                     <button style={styles.button} onClick={() => setIsModalOpen(true)}>Mejoras Permanentes</button>
+                </div>
+
+                <div style={styles.card}>
+                    <h2>Procesar desde Google Drive</h2>
+                    <p>Conecta tu Google Drive para procesar archivos directamente sin subirlos.</p>
+
+                    {!isConnectedToDrive ? (
+                        <button
+                            onClick={handleConnectDrive}
+                            style={{ ...styles.button, backgroundColor: '#4285f4' }}
+                        >
+                            🔗 Conectar Google Drive
+                        </button>
+                    ) : (
+                        <>
+                            <div style={{
+                                backgroundColor: '#e8f5e9',
+                                padding: '10px',
+                                borderRadius: '6px',
+                                marginBottom: '15px',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                            }}>
+                                <span style={{ color: '#2e7d32', fontWeight: 'bold' }}>
+                                    ✓ Conectado a Google Drive
+                                </span>
+                                <button
+                                    onClick={handleDisconnectDrive}
+                                    style={{
+                                        ...styles.button,
+                                        backgroundColor: '#f44336',
+                                        padding: '8px 16px',
+                                        margin: 0
+                                    }}
+                                >
+                                    Desconectar
+                                </button>
+                            </div>
+
+                            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '10px' }}>
+                                Pega el link del archivo de Drive (.m4a):
+                            </label>
+
+                            <input
+                                type="text"
+                                value={driveLink}
+                                onChange={(e) => setDriveLink(e.target.value)}
+                                placeholder="https://drive.google.com/file/d/ABC123..."
+                                style={{
+                                    width: '100%',
+                                    padding: '12px',
+                                    borderRadius: '6px',
+                                    border: '1px solid #ddd',
+                                    fontSize: '14px',
+                                    boxSizing: 'border-box',
+                                    marginBottom: '15px'
+                                }}
+                            />
+
+                            <button
+                                onClick={handleProcessFromDrive}
+                                disabled={isDriveProcessing || !driveLink}
+                                style={{
+                                    ...styles.button,
+                                    ...((isDriveProcessing || !driveLink) ? styles.buttonDisabled : {}),
+                                    backgroundColor: '#34a853'
+                                }}
+                            >
+                                {isDriveProcessing ? '🔄 Procesando desde Drive...' : '📁 Procesar desde Drive'}
+                            </button>
+
+                            <p style={{ fontSize: '12px', color: '#666', marginTop: '10px' }}>
+                                💡 <strong>Privacidad garantizada:</strong> Tu archivo se procesa en memoria y el resultado se guarda en TU Google Drive. Nosotros no almacenamos nada.
+                            </p>
+                        </>
+                    )}
                 </div>
 
                 <div style={styles.card}>
