@@ -68,28 +68,7 @@ const callGroqTranscription = async (file: File | Blob) => {
     return await response.json();
 };
 
-// Helper para chat/resumen (Llama 3)
-const callGroqChat = async (messages: any[], model: string = "llama-3.3-70b-versatile") => {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-            "Authorization": `Bearer ${GROQ_API_KEY}`,
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            messages,
-            model,
-            temperature: 0.5,
-        }),
-    });
 
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(`Groq Chat API Error: ${response.status} - ${JSON.stringify(errorData)}`);
-    }
-
-    return await response.json();
-};
 
 const App: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
