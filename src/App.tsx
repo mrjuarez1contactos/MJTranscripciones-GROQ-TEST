@@ -1,47 +1,51 @@
 import React, { useState, useRef, useEffect } from 'react';
-// === ARREGLO DE TIPOS DE SEGURIDAD ===
-// Importa los 'Enums' de tipos correctos
-import { 
-    GoogleGenerativeAI, 
-    HarmCategory, 
-    HarmBlockThreshold 
-} from "@google/generative-ai";
+// === CONFIGURACIÓN GROQ ===
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
 
-// Helper function to convert a file to a base64 string
-const fileToBase64 = (file: File | Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = () => {
-            // result is a data URL like "data:audio/mp3;base64,..."
-            // We only want the base64 part
-            const result = reader.result as string;
-            resolve(result.split(',')[1]);
-        };
-        reader.onerror = (error) => reject(error);
+// Helper para transcripción (Whisper)
+const callGroqTranscription = async (file: File | Blob) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("model", "whisper-large-v3");
+
+    const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+        method: "POST",
+        headers: {
+            "Authorization": `Bearer ${GROQ_API_KEY}`,
+        },
+        body: formData,
     });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`Groq Transcription API Error: ${response.status} - ${JSON.stringify(errorData)}`);
+    }
+
+    return await response.json();
 };
 
-// === ARREGLO DE TIPOS DE SEGURIDAD ===
-// Define la configuración de seguridad usando los Enums importados
-const safetySettings = [
-    {
-      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-      threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-      threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-      threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-      threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-];
+// Helper para chat/resumen (Llama 3)
+const callGroqChat = async (messages: any[], model: string = "llama-3.3-70b-versatile") => {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+            "Authorization": `Bearer ${GROQ_API_KEY}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            messages,
+            model,
+            temperature: 0.5,
+        }),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`Groq Chat API Error: ${response.status} - ${JSON.stringify(errorData)}`);
+    }
+
+    return await response.json();
+};
 
 const App: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
@@ -105,26 +109,10 @@ const App: React.FC = () => {
         setBusinessSummary('');
 
         try {
-            const ai = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
+            // Llamada a GROQ para transcripción
+            const result = await callGroqTranscription(file);
             
-            const base64Audio = await fileToBase64(file);
-            const audioPart = {
-                inlineData: {
-                    data: base64Audio,
-                    mimeType: file.type,
-                },
-            };
-            
-            // Se añade la configuración de seguridad (ya con los tipos correctos)
-            const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash', safetySettings });
-            
-            const result = await model.generateContent({
-                contents: [{ role: "user", parts: [audioPart, {text: "Transcribe this audio recording."}] }],
-            });
-
-            const response = result.response;
-            
-            setTranscription(response.text() ?? "");
+            setTranscription(result.text ?? "");
             setStatus('Transcripción completa. Ahora puedes generar un resumen general.');
         } catch (error) {
             console.error('Transcription error:', error);
@@ -146,7 +134,6 @@ const App: React.FC = () => {
         setGeneralSummary('');
 
         try {
-            const ai = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
             const prompt = `Basado en la siguiente transcripción de una llamada, genera un resumen general claro y conciso. El resumen debe identificar los puntos clave, las acciones a seguir y el sentimiento general de la llamada, sin asumir ningún contexto de negocio específico.
             
             Transcripción:
@@ -155,12 +142,14 @@ const App: React.FC = () => {
             ---
             `;
 
-            // Se añade la configuración de seguridad (ya con los tipos correctos)
-            const model = ai.getGenerativeModel({ model: 'gemini-2.5-pro', safetySettings });
-            const result = await model.generateContent(prompt); 
-            const response = result.response;
-
-            setGeneralSummary(response.text() ?? "");
+            // Llamada a GROQ
+            const messages = [
+                { role: "system", content: "Eres un asistente experto en resumir conversaciones." },
+                { role: "user", content: prompt }
+            ];
+            
+            const result = await callGroqChat(messages);
+            setGeneralSummary(result.choices[0]?.message?.content ?? "");
             setStatus('Resumen general generado. Ahora puedes generar el resumen de negocio.');
         } catch (error) {
             console.error('General summary generation error:', error);
@@ -181,7 +170,6 @@ const App: React.FC = () => {
         setBusinessSummary('');
 
         try {
-            const ai = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
             const permanentInstructionsText = globalInstructions.length > 0
                 ? `Para este resumen, aplica estas reglas e instrucciones permanentes en todo momento: ${globalInstructions.join('. ')}`
                 : '';
@@ -196,12 +184,14 @@ const App: React.FC = () => {
             ---
             `;
 
-            // Se añade la configuración de seguridad (ya con los tipos correctos)
-            const model = ai.getGenerativeModel({ model: 'gemini-2.5-pro', safetySettings });
-            const result = await model.generateContent(prompt);
-            const response = result.response;
+            // Llamada a GROQ
+            const messages = [
+                { role: "system", content: "Eres un asistente experto en negocios de mariscos y resúmenes ejecutivos." },
+                { role: "user", content: prompt }
+            ];
 
-            setBusinessSummary(response.text() ?? "");
+            const result = await callGroqChat(messages);
+            setBusinessSummary(result.choices[0]?.message?.content ?? "");
             setStatus('Resumen de negocio generado. Puedes mejorarlo a continuación.');
         } catch (error) {
             console.error('Business summary generation error:', error);
@@ -225,13 +215,30 @@ const App: React.FC = () => {
         setStatus('Aplicando mejoras al resumen de negocio...');
 
         try {
-            const ai = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
-            const instruction = improvementInstruction || 'la instrucción fue grabada por audio.';
+            let instruction = improvementInstruction;
+
+            // 1. Si hay audio, primero lo transcribimos
+            if (audioInstructionBlobRef.current) {
+                setStatus('Transcribiendo instrucciones de audio...');
+                try {
+                    const transResult = await callGroqTranscription(audioInstructionBlobRef.current);
+                    instruction = transResult.text || "";
+                    if (!instruction) throw new Error("No se pudo transcribir el audio.");
+                } catch (e) {
+                     console.error("Error transcribing instruction:", e);
+                     instruction = "Error al transcribir instrucción de audio.";
+                }
+            }
+
+            if (!instruction) {
+                instruction = 'Sin instrucción específica.';
+            }
+
             const permanentInstructionsText = globalInstructions.length > 0
                 ? `Adicionalmente, aplica estas reglas e instrucciones permanentes en todo momento: ${globalInstructions.join('. ')}`
                 : '';
 
-            const promptParts: any[] = [{ text: `
+            const prompt = `
                 Necesito que mejores el siguiente "Resumen de Negocio Actual" basándote en la "Transcripción Original" y la "Instrucción de Mejora" que te proporciono. 
                 
                 ${permanentInstructionsText}
@@ -249,27 +256,18 @@ const App: React.FC = () => {
                 ---
 
                 Por favor, genera el "Nuevo Resumen de Negocio Mejorado":
-            `}];
+            `;
 
-            if (audioInstructionBlobRef.current) {
-                const base64Audio = await fileToBase64(audioInstructionBlobRef.current);
-                promptParts.push({
-                    inlineData: {
-                        data: base64Audio,
-                        mimeType: audioInstructionBlobRef.current.type,
-                    }
-                });
-            }
+            // Llamada a GROQ
+            const messages = [
+                { role: "system", content: "Eres un asistente experto mejorando resúmenes de negocio siguiendo instrucciones precisas." },
+                { role: "user", content: prompt }
+            ];
 
-            // Se añade la configuración de seguridad (ya con los tipos correctos)
-            const model = ai.getGenerativeModel({ model: 'gemini-2.5-pro', safetySettings });
+            setStatus('Aplicando mejoras...');
+            const result = await callGroqChat(messages);
+            setBusinessSummary(result.choices[0]?.message?.content ?? "");
             
-            const result = await model.generateContent({
-                contents: [{ role: "user", parts: promptParts }],
-            });
-            const response = result.response;
-            
-            setBusinessSummary(response.text() ?? "");
             setStatus('Resumen de negocio mejorado exitosamente.');
 
             if (isPermanent && improvementInstruction) {

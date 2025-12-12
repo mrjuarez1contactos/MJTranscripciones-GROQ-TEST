@@ -44,3 +44,37 @@ Una vez que ejecutes `npm run dev`, la terminal te mostrará unas direcciones UR
 *   **Network:** `http://192.1G.X.X:5173/` - **Esta es la que usarás en tu móvil.** Asegúrate de que tu móvil y tu computadora estén en la misma red Wi-Fi y escribe esta dirección en el navegador de tu móvil.
 
 ¡Y listo! Ya tienes tu aplicación de trabajo estable y funcionando. Cuando termines de usarla, simplemente cierra la ventana de la terminal. Para volver a usarla, solo tienes que repetir el paso 6.
+
+---
+
+## 🏗️ Arquitectura Híbrida (Groq + Gemini)
+
+Este es un clon de prueba para migrar a una arquitectura más eficiente en costos.
+
+### Transcripción de Audio
+- **Servicio:** Groq Whisper Large V3
+- **Costo:** $0.0005/minuto (~$11/mes para 800 archivos)
+- **Velocidad:** 164x tiempo real
+- **Calidad:** Comparable a Gemini Flash
+
+### Resúmenes de Negocio
+- **Servicio:** Google Gemini 2.5-Pro
+- **Costo:** ~$3/mes
+- **Calidad:** Óptima para contexto específico del negocio
+
+### Comparación de Costos
+
+| Componente | Gemini 100% | Groq + Gemini | Ahorro |
+|------------|-------------|---------------|--------|
+| Transcripción | $162 | $11 | $151 (93%) |
+| Resúmenes | $3 | $3 | $0 |
+| **Total/mes** | **$165** | **$14** | **$151 (91.6%)** |
+
+### Estado del Proyecto
+- ✅ Frontend migrado (App.tsx usa Groq directamente)
+- 🔄 Backend: pendiente de migración en Render
+- 📋 Documentación: completa en BACKEND_MIGRATION.md
+
+### Repositorios
+- **Producción:** [MJTranscripciones](https://github.com/mrjuarez1contactos/MJTranscripciones) (Gemini 100%)
+- **Pruebas:** [MJTranscripciones-GROQ-TEST](https://github.com/mrjuarez1contactos/MJTranscripciones-GROQ-TEST) (Groq + Gemini)
