@@ -2,6 +2,50 @@ import React, { useState, useRef, useEffect } from 'react';
 // === CONFIGURACIÓN GROQ ===
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
 
+// === CONFIGURACIÓN GEMINI ===
+import {
+    GoogleGenerativeAI,
+    HarmCategory,
+    HarmBlockThreshold
+} from "@google/generative-ai";
+const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || '');
+
+// Helper function to convert a file to a base64 string
+const fileToBase64 = (file: File | Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => {
+            // result is a data URL like "data:audio/mp3;base64,..."
+            // We only want the base64 part
+            const result = reader.result as string;
+            resolve(result.split(',')[1]);
+        };
+        reader.onerror = (error) => reject(error);
+    });
+};
+
+// === ARREGLO DE TIPOS DE SEGURIDAD ===
+// Define la configuración de seguridad usando los Enums importados
+const safetySettings = [
+    {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+];
+
 // Helper para transcripción (Whisper)
 const callGroqTranscription = async (file: File | Blob) => {
     const formData = new FormData();
@@ -111,7 +155,7 @@ const App: React.FC = () => {
         try {
             // Llamada a GROQ para transcripción
             const result = await callGroqTranscription(file);
-            
+
             setTranscription(result.text ?? "");
             setStatus('Transcripción completa. Ahora puedes generar un resumen general.');
         } catch (error) {
@@ -143,13 +187,15 @@ const App: React.FC = () => {
             `;
 
             // Llamada a GROQ
-            const messages = [
-                { role: "system", content: "Eres un asistente experto en resumir conversaciones." },
-                { role: "user", content: prompt }
-            ];
-            
-            const result = await callGroqChat(messages);
-            setGeneralSummary(result.choices[0]?.message?.content ?? "");
+            // Llamada a Gemini (Hybrid Architecture)
+            // Llamada a Gemini (Hybrid Architecture)
+            const model = genAI.getGenerativeModel({
+                model: "gemini-2.5-flash",
+                safetySettings
+            });
+            const result = await model.generateContent(prompt);
+            const response = result.response;
+            setGeneralSummary(response.text());
             setStatus('Resumen general generado. Ahora puedes generar el resumen de negocio.');
         } catch (error) {
             console.error('General summary generation error:', error);
@@ -185,13 +231,15 @@ const App: React.FC = () => {
             `;
 
             // Llamada a GROQ
-            const messages = [
-                { role: "system", content: "Eres un asistente experto en negocios de mariscos y resúmenes ejecutivos." },
-                { role: "user", content: prompt }
-            ];
-
-            const result = await callGroqChat(messages);
-            setBusinessSummary(result.choices[0]?.message?.content ?? "");
+            // Llamada a Gemini (Hybrid Architecture)
+            // Llamada a Gemini (Hybrid Architecture)
+            const model = genAI.getGenerativeModel({
+                model: "gemini-2.5-pro",
+                safetySettings
+            });
+            const result = await model.generateContent(prompt);
+            const response = result.response;
+            setBusinessSummary(response.text());
             setStatus('Resumen de negocio generado. Puedes mejorarlo a continuación.');
         } catch (error) {
             console.error('Business summary generation error:', error);
@@ -225,8 +273,8 @@ const App: React.FC = () => {
                     instruction = transResult.text || "";
                     if (!instruction) throw new Error("No se pudo transcribir el audio.");
                 } catch (e) {
-                     console.error("Error transcribing instruction:", e);
-                     instruction = "Error al transcribir instrucción de audio.";
+                    console.error("Error transcribing instruction:", e);
+                    instruction = "Error al transcribir instrucción de audio.";
                 }
             }
 
@@ -238,7 +286,8 @@ const App: React.FC = () => {
                 ? `Adicionalmente, aplica estas reglas e instrucciones permanentes en todo momento: ${globalInstructions.join('. ')}`
                 : '';
 
-            const prompt = `
+            const promptParts: any[] = [{
+                text: `
                 Necesito que mejores el siguiente "Resumen de Negocio Actual" basándote en la "Transcripción Original" y la "Instrucción de Mejora" que te proporciono. 
                 
                 ${permanentInstructionsText}
@@ -256,18 +305,33 @@ const App: React.FC = () => {
                 ---
 
                 Por favor, genera el "Nuevo Resumen de Negocio Mejorado":
-            `;
+            `}];
 
-            // Llamada a GROQ
-            const messages = [
-                { role: "system", content: "Eres un asistente experto mejorando resúmenes de negocio siguiendo instrucciones precisas." },
-                { role: "user", content: prompt }
-            ];
+            // ⚠️ ESTA PARTE ES CRÍTICA - USA fileToBase64
+            if (audioInstructionBlobRef.current) {
+                const base64Audio = await fileToBase64(audioInstructionBlobRef.current);
+                promptParts.push({
+                    inlineData: {
+                        data: base64Audio,
+                        mimeType: audioInstructionBlobRef.current.type,
+                    }
+                });
+            }
 
-            setStatus('Aplicando mejoras...');
-            const result = await callGroqChat(messages);
-            setBusinessSummary(result.choices[0]?.message?.content ?? "");
-            
+            const model = genAI.getGenerativeModel({
+                model: 'gemini-2.5-pro',
+                safetySettings
+            });
+
+            const result = await model.generateContent({
+                contents: [{
+                    role: "user",
+                    parts: promptParts,
+                }],
+            });
+            const response = result.response;
+            setBusinessSummary(response.text() ?? "");
+
             setStatus('Resumen de negocio mejorado exitosamente.');
 
             if (isPermanent && improvementInstruction) {
@@ -316,7 +380,7 @@ const App: React.FC = () => {
             setStatus("Faltan datos para generar el documento.");
             return;
         }
-    
+
         const docContent = `
 =========================================
 REGISTRO DE LLAMADA
@@ -343,7 +407,7 @@ ${generalSummary}
 
 ${businessSummary}
         `;
-    
+
         const blob = new Blob([docContent.trim()], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -388,7 +452,7 @@ ${businessSummary}
         reader.readAsText(file);
         event.target.value = ''; // Reset input
     };
-    
+
     // Styles
     const styles: { [key: string]: React.CSSProperties } = {
         container: { fontFamily: 'sans-serif', backgroundColor: '#f0f2f5', minHeight: '100vh', padding: '2rem' },
@@ -409,20 +473,20 @@ ${businessSummary}
 
     return (
         <div style={styles.container}>
-            <div style={{maxWidth: '800px', margin: '0 auto'}}>
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem'}}>
-                    <h1 style={{...styles.header, marginBottom: 0, textAlign: 'left'}}>Transcriptor y Resumidor</h1>
+            <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h1 style={{ ...styles.header, marginBottom: 0, textAlign: 'left' }}>Transcriptor y Resumidor</h1>
                     <button style={styles.button} onClick={() => setIsModalOpen(true)}>Mejoras Permanentes</button>
                 </div>
 
                 <div style={styles.card}>
                     <h2>1. Sube tu archivo de audio</h2>
-                    <input type="file" accept="audio/*" onChange={handleFileChange} style={{marginTop: '1rem'}} />
-                    <button onClick={handleTranscribe} disabled={!file || isLoading} style={{...styles.button, ...( !file || isLoading ? styles.buttonDisabled : {}), display: 'block' }}>
+                    <input type="file" accept="audio/*" onChange={handleFileChange} style={{ marginTop: '1rem' }} />
+                    <button onClick={handleTranscribe} disabled={!file || isLoading} style={{ ...styles.button, ...(!file || isLoading ? styles.buttonDisabled : {}), display: 'block' }}>
                         {isLoading && status.startsWith('Transcribiendo') ? 'Transcribiendo...' : 'Transcribir'}
                     </button>
                 </div>
-                
+
                 <p style={styles.status}>{status}</p>
 
                 {transcription && (
@@ -430,7 +494,7 @@ ${businessSummary}
                         <h2>2. Transcripción</h2>
                         <textarea style={styles.textarea} value={transcription} readOnly />
                         {!generalSummary && (
-                            <button onClick={handleGenerateGeneralSummary} disabled={isLoading} style={{...styles.button, ...(isLoading ? styles.buttonDisabled : {})}}>
+                            <button onClick={handleGenerateGeneralSummary} disabled={isLoading} style={{ ...styles.button, ...(isLoading ? styles.buttonDisabled : {}) }}>
                                 {isLoading && status.startsWith('Generando resumen general') ? 'Generando...' : 'Generar Resumen General'}
                             </button>
                         )}
@@ -442,7 +506,7 @@ ${businessSummary}
                         <h2>3. Resumen General</h2>
                         <textarea style={styles.textarea} value={generalSummary} readOnly />
                         {!businessSummary && (
-                             <button onClick={handleGenerateBusinessSummary} disabled={isLoading} style={{...styles.button, ...(isLoading ? styles.buttonDisabled : {})}}>
+                            <button onClick={handleGenerateBusinessSummary} disabled={isLoading} style={{ ...styles.button, ...(isLoading ? styles.buttonDisabled : {}) }}>
                                 {isLoading && status.startsWith('Generando resumen de negocio') ? 'Generando...' : 'Generar Resumen de Negocio'}
                             </button>
                         )}
@@ -453,28 +517,28 @@ ${businessSummary}
                     <div style={styles.card}>
                         <h2>4. Resumen de Negocio</h2>
                         {file && <p style={styles.filenameDisplay}>Archivo: {file.name}</p>}
-                        <textarea 
-                            style={styles.textarea} 
+                        <textarea
+                            style={styles.textarea}
                             value={businessSummary}
                             onChange={(e) => setBusinessSummary(e.target.value)}
                         />
-                        <div style={{marginTop: '1.5rem', borderTop: '1px solid #eee', paddingTop: '1.5rem'}}>
+                        <div style={{ marginTop: '1.5rem', borderTop: '1px solid #eee', paddingTop: '1.5rem' }}>
                             <h3>Mejorar Resumen de Negocio</h3>
                             <p>Proporciona una instrucción para refinar el resumen anterior.</p>
                             <textarea
-                                style={{...styles.textarea, minHeight: '80px'}}
+                                style={{ ...styles.textarea, minHeight: '80px' }}
                                 placeholder="Ej: 'El cliente se llama Juan Pérez, no Juan Ramírez' o 'Enfócate más en el precio del pulpo'"
                                 value={improvementInstruction}
-                                onChange={(e) => setImprovementInstruction(e.target.value)} 
+                                onChange={(e) => setImprovementInstruction(e.target.value)}
                             />
-                            <button onClick={toggleRecording} style={{...styles.button, backgroundColor: isRecording ? '#fa3e3e' : '#42b72a'}}>
+                            <button onClick={toggleRecording} style={{ ...styles.button, backgroundColor: isRecording ? '#fa3e3e' : '#42b72a' }}>
                                 {isRecording ? 'Detener Grabación' : 'Grabar Instrucciones'}
                             </button>
-                            <div style={{marginTop: '1rem'}}>
-                                <button onClick={() => handleImproveSummary(false)} disabled={isLoading} style={{...styles.button, ...(isLoading ? styles.buttonDisabled : {})}}>
+                            <div style={{ marginTop: '1rem' }}>
+                                <button onClick={() => handleImproveSummary(false)} disabled={isLoading} style={{ ...styles.button, ...(isLoading ? styles.buttonDisabled : {}) }}>
                                     Aplicar Mejora Temporal
                                 </button>
-                                <button onClick={() => handleImproveSummary(true)} disabled={isLoading} style={{...styles.button, ...(isLoading ? styles.buttonDisabled : {}), marginLeft: '1am', backgroundColor: '#36a420'}}>
+                                <button onClick={() => handleImproveSummary(true)} disabled={isLoading} style={{ ...styles.button, ...(isLoading ? styles.buttonDisabled : {}), marginLeft: '1am', backgroundColor: '#36a420' }}>
                                     Aplicar y Guardar Mejora
                                 </button>
                             </div>
@@ -492,12 +556,12 @@ ${businessSummary}
                     </div>
                 )}
 
-                 {isModalOpen && (
+                {isModalOpen && (
                     <div style={styles.modalOverlay} onClick={() => setIsModalOpen(false)}>
                         <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
                             <h2>Mejoras Permanentes</h2>
                             <p>Estas instrucciones se aplicarán a TODOS los resúmenes de negocio futuros.</p>
-                            
+
                             <div style={{ display: 'flex', gap: '1rem', margin: '1rem 0', borderBottom: '1px solid #eee', paddingBottom: '1rem' }}>
                                 <input
                                     type="file"
@@ -506,36 +570,38 @@ ${businessSummary}
                                     accept=".txt"
                                     style={{ display: 'none' }}
                                 />
-                                <button onClick={() => importFileInputRef.current?.click()} style={{...styles.button, flex: 1, backgroundColor: '#42b72a'}}>
+                                <button onClick={() => importFileInputRef.current?.click()} style={{ ...styles.button, flex: 1, backgroundColor: '#42b72a' }}>
                                     Importar desde Archivo
                                 </button>
-                                <button onClick={handleExportInstructions} style={{...styles.button, flex: 1}}>
+                                <button onClick={handleExportInstructions} style={{ ...styles.button, flex: 1 }}>
                                     Exportar a Archivo
                                 </button>
                             </div>
-                            
+
                             <div style={{ margin: '1rem 0', display: 'flex' }}>
-                                <input 
+                                <input
                                     type="text"
                                     value={newInstruction}
                                     onChange={(e) => setNewInstruction(e.target.value)}
                                     placeholder="Añadir nueva instrucción permanente"
                                     style={styles.modalInput}
-                                    onKeyPress={(e) => { if (e.key === 'Enter') {
-                                        if (newInstruction && !globalInstructions.includes(newInstruction)) {
-                                            saveGlobalInstructions([...globalInstructions, newInstruction]);
-                                            setNewInstruction('');
+                                    onKeyPress={(e) => {
+                                        if (e.key === 'Enter') {
+                                            if (newInstruction && !globalInstructions.includes(newInstruction)) {
+                                                saveGlobalInstructions([...globalInstructions, newInstruction]);
+                                                setNewInstruction('');
+                                            }
                                         }
-                                    }}}
+                                    }}
                                 />
-                                <button 
+                                <button
                                     onClick={() => {
                                         if (newInstruction && !globalInstructions.includes(newInstruction)) {
                                             saveGlobalInstructions([...globalInstructions, newInstruction]);
                                             setNewInstruction('');
                                         }
                                     }}
-                                    style={{...styles.button, ...styles.modalButton}}
+                                    style={{ ...styles.button, ...styles.modalButton }}
                                 >
                                     Añadir
                                 </button>
@@ -544,8 +610,8 @@ ${businessSummary}
                                 {globalInstructions.length === 0 && <p>No hay instrucciones guardadas.</p>}
                                 {globalInstructions.map((inst, index) => (
                                     <div key={index} style={styles.instructionItem}>
-                                        <span style={{flex: 1, marginRight: '1rem'}}>{inst}</span>
-                                        <button 
+                                        <span style={{ flex: 1, marginRight: '1rem' }}>{inst}</span>
+                                        <button
                                             onClick={() => {
                                                 const updated = globalInstructions.filter((_, i) => i !== index);
                                                 saveGlobalInstructions(updated);
@@ -557,7 +623,7 @@ ${businessSummary}
                                     </div>
                                 ))}
                             </div>
-                            <button onClick={() => setIsModalOpen(false)} style={{...styles.button, marginTop: '1rem'}}>Cerrar</button>
+                            <button onClick={() => setIsModalOpen(false)} style={{ ...styles.button, marginTop: '1rem' }}>Cerrar</button>
                         </div>
                     </div>
                 )}
