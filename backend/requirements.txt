@@ -1,7 +1,7 @@
 fastapi==0.109.2
 uvicorn==0.27.1
 python-multipart==0.0.9
-groq==0.4.1
+groq=>=0.9.0
 google-generativeai==0.4.0
 pyjwt==2.8.0
 requests==2.31.0
