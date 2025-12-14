@@ -7,6 +7,7 @@
  * NUNCA expongas JWT_SECRET en el frontend en producción.
  */
 
+// @ts-ignore - jwt-encode usually lacks type definitions
 import sign from 'jwt-encode';
 import { jwtDecode } from 'jwt-decode';
 
