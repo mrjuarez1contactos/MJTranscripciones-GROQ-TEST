@@ -45,18 +45,25 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS
+# CORS configuration - explicit origins for security
 origins = [
-    "http://localhost:5173",  # Vite Dev
-    "http://localhost:4173",  # Vite Preview
-    ALLOWED_ORIGIN            # Production Vercel URL
+    "http://localhost:5173",      # Vite dev
+    "http://localhost:4173",      # Vite preview  
+    "http://localhost:8000",      # Local backend
+    "https://mj-transcripciones-groq-test.vercel.app",  # Production frontend
+    "https://mj-transcripciones-groq-test-1.onrender.com",  # Production backend
+    ALLOWED_ORIGIN if ALLOWED_ORIGIN else "",  # Env variable override
 ]
+
+# Remove empty strings
+origins = [o for o in origins if o]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
 # --- Models ---
