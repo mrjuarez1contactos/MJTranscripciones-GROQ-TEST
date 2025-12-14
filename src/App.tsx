@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // === CONFIGURACIÓN ===
-// Ya no hay keys expuestas aquí. Todo va al backend.
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 const App: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
@@ -65,22 +66,8 @@ const App: React.FC = () => {
         }
     }, []);
 
-    // === SECURITY: Session Management ===
-    const getSessionToken = async () => {
-        // En memoria, si ya tenemos uno válido (simple check, idealmente checar expiración)
-        if (sessionToken) return sessionToken;
-
-        try {
-            const res = await fetch(`${BACKEND_URL}/api/session`);
-            if (!res.ok) throw new Error("No se pudo iniciar sesión segura con el servidor.");
-            const data = await res.json();
-            setSessionToken(data.token);
-            return data.token;
-        } catch (e) {
-            console.error("Session Error:", e);
-            throw e;
-        }
-    };
+    // === SECURITY: Session Management (REMOVED) ===
+    // const getSessionToken = async () => { ... };
 
     const saveGlobalInstructions = (instructions: string[]) => {
         setGlobalInstructions(instructions);
@@ -128,71 +115,11 @@ const App: React.FC = () => {
     };
 
     const handleProcessFromDrive = async () => {
-        if (!driveLink) {
-            setStatus('Por favor, pega un link de Google Drive.');
-            return;
-        }
-
-        if (!isConnectedToDrive || !driveAccessToken) {
-            setStatus('Primero debes conectar tu Google Drive.');
-            return;
-        }
-
-        const fileId = extractDriveFileId(driveLink);
-
-        if (!fileId) {
-            setStatus('Link de Drive inválido.');
-            return;
-        }
-
-        setIsDriveProcessing(true);
-        setStatus(`Iniciando procesamiento seguro desde Drive...`);
-        setTranscription('');
-        setGeneralSummary('');
-        setBusinessSummary('');
-
-        try {
-            // 1. Get Session Token
-            const token = await getSessionToken();
-
-            // 2. Call Backend
-            setStatus("Procesando en servidor seguro (Descarga -> Transcribe -> Resume)...");
-            const response = await fetch(`${BACKEND_URL}/api/process-drive`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    file_id: fileId,
-                    access_token: driveAccessToken,
-                    permanent_instructions: globalInstructions
-                }),
-            });
-
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail || `Backend error: ${response.statusText}`);
-            }
-
-            const data = await response.json();
-
-            // Mostrar resultados
-            setTranscription(data.transcription ?? "");
-            setGeneralSummary(data.general_summary ?? "");
-            setBusinessSummary(data.business_summary ?? "");
-
-            setStatus(`Procesamiento completo. Archivo guardado en tu Drive: ${data.txt_file_name}`);
-            setDriveLink(''); // Limpiar input
-
-        } catch (error) {
-            console.error('Drive processing error:', error);
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            setStatus(`Error procesando desde Drive: ${errorMessage}`);
-            setSessionToken(''); // Clear token on error to force refresh
-        } finally {
-            setIsDriveProcessing(false);
-        }
+        setStatus('La funcionalidad de Drive está temporalmente deshabilitada en esta versión "Pure Frontend". Usa la subida de archivos locales.');
+        /*
+        // Drive logic commented out due to removal of Backend Dependency
+        if (!driveLink) { ... }
+        */
     };
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -219,64 +146,69 @@ const App: React.FC = () => {
         setBusinessSummary('');
 
         try {
-            // 1. Get Session Token
-            const token = await getSessionToken();
+            // 1. Convertir archivo a base64
+            const fileBase64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const result = reader.result as string;
+                    const base64 = result.split(',')[1];
+                    resolve(base64);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
 
-            // 2. Prepare Form Data
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("instructions", JSON.stringify(globalInstructions));
+            // 2. Transcribir con Groq
+            setStatus(`Transcribiendo ${file.name}...`);
+            const groqResponse = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${GROQ_API_KEY}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'whisper-large-v3',
+                    file: fileBase64,
+                    language: 'es',
+                }),
+            });
 
-            // 3. Call Backend
-            // Add timeout wrapper (30 seconds)
-            const fetchWithTimeout = async () => {
-                const timeoutPromise = new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error("Request timeout (30s)")), 30000)
-                );
-
-                return Promise.race([
-                    fetch(`${BACKEND_URL}/api/process-local`, {
-                        method: "POST",
-                        headers: {
-                            "Authorization": `Bearer ${token}`
-                        },
-                        body: formData,
-                    }),
-                    timeoutPromise,
-                ]);
-            };
-
-            const response = await fetchWithTimeout();
-
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail || `Backend Error: ${response.status}`);
+            if (!groqResponse.ok) {
+                const errText = await groqResponse.text();
+                throw new Error(`Groq error: ${groqResponse.status} - ${errText}`);
             }
 
-            const result = await response.json();
+            const groqData = await groqResponse.json();
+            const transcription = groqData.text;
+            setTranscription(transcription);
 
-            setTranscription(result.transcription ?? "");
-            setGeneralSummary(result.generalSummary ?? "");
-            setBusinessSummary(result.businessSummary ?? "");
+            // 3. Generar resúmenes con Gemini
+            setStatus('Generando resúmenes...');
+            const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+            const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+            // General summary
+            const generalPrompt = `Genera un resumen general claro y conciso identificando puntos clave y acciones.\n\nTexto:\n${transcription}`;
+            const generalResponse = await model.generateContent(generalPrompt);
+            setGeneralSummary(generalResponse.response.text());
+
+            // Business summary
+            const businessModel = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
+            const businessText = globalInstructions.length > 0 ? globalInstructions.join('. ') : '';
+            const businessPrompt = `Genera un resumen de negocio enfocado en mariscos${businessText ? '. ' + businessText : ''}.\n\nTexto:\n${transcription}`;
+            const businessResponse = await businessModel.generateContent(businessPrompt);
+            setBusinessSummary(businessResponse.response.text());
+
             setStatus('Procesamiento completo (Transcripción + Resúmenes).');
         } catch (error) {
             console.error('Processing error:', error);
-            let errorMessage = "Error desconocido";
-
-            if (error instanceof TypeError && error.message === "Failed to fetch") {
-                errorMessage = "Error de red (CORS o conexión). Intenta desde Chrome o Edge en escritorio, o prueba tu conexión a Internet.";
-            } else if (error instanceof Error) {
-                if (error.message.includes("timeout")) {
-                    errorMessage = "El servidor tardó demasiado en responder (timeout). Intenta nuevamente.";
-                } else {
-                    errorMessage = error.message;
-                }
+            let errorMessage = 'Error desconocido';
+            if (error instanceof Error) {
+                errorMessage = error.message;
             } else {
                 errorMessage = String(error);
             }
-
             setStatus(`Error en el procesamiento: ${errorMessage}`);
-            setSessionToken('');
         } finally {
             setIsLoading(false);
         }
