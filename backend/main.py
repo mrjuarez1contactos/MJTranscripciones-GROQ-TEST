@@ -60,9 +60,10 @@ origins = [o for o in origins if o]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-allow_headers=["*"],)
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Models ---
 class DriveRequest(BaseModel):
