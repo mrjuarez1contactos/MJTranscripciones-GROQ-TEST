@@ -1,4 +1,5 @@
 # Transcriptor y Resumidor de Audio
+<!-- Deployment test: Trigger rebuild with VITE_BACKEND_URL -->
 
 Esta es la aplicación que hemos construido juntos. Sigue estas instrucciones para ejecutarla en tu propia computadora y tener una versión estable y funcional para tu trabajo diario.
 
