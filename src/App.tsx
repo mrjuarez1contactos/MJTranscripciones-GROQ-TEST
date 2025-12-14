@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 
 // === CONFIGURACIÓN ===
 // Ya no hay keys expuestas aquí. Todo va al backend.
-const BACKEND_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 
 const App: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
@@ -228,13 +228,25 @@ const App: React.FC = () => {
             formData.append("instructions", JSON.stringify(globalInstructions));
 
             // 3. Call Backend
-            const response = await fetch(`${BACKEND_URL}/api/process-local`, {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${token}`
-                },
-                body: formData,
-            });
+            // Add timeout wrapper (30 seconds)
+            const fetchWithTimeout = async () => {
+                const timeoutPromise = new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error("Request timeout (30s)")), 30000)
+                );
+
+                return Promise.race([
+                    fetch(`${BACKEND_URL}/api/process-local`, {
+                        method: "POST",
+                        headers: {
+                            "Authorization": `Bearer ${token}`
+                        },
+                        body: formData,
+                    }),
+                    timeoutPromise,
+                ]);
+            };
+
+            const response = await fetchWithTimeout();
 
             if (!response.ok) {
                 const err = await response.json();
@@ -249,7 +261,20 @@ const App: React.FC = () => {
             setStatus('Procesamiento completo (Transcripción + Resúmenes).');
         } catch (error) {
             console.error('Processing error:', error);
-            const errorMessage = error instanceof Error ? error.message : String(error);
+            let errorMessage = "Error desconocido";
+
+            if (error instanceof TypeError && error.message === "Failed to fetch") {
+                errorMessage = "Error de red (CORS o conexión). Intenta desde Chrome o Edge en escritorio, o prueba tu conexión a Internet.";
+            } else if (error instanceof Error) {
+                if (error.message.includes("timeout")) {
+                    errorMessage = "El servidor tardó demasiado en responder (timeout). Intenta nuevamente.";
+                } else {
+                    errorMessage = error.message;
+                }
+            } else {
+                errorMessage = String(error);
+            }
+
             setStatus(`Error en el procesamiento: ${errorMessage}`);
             setSessionToken('');
         } finally {
