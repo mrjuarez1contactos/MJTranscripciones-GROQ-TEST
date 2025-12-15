@@ -12,6 +12,7 @@ import sign from 'jwt-encode';
 import { jwtDecode } from 'jwt-decode';
 
 // TEMPORAL: Para testing local
+// Vercel Deployment Fix
 // En producción, esto vendría de un login server
 const JWT_SECRET = import.meta.env.VITE_JWT_SECRET || 'test-secret-key-min-32-characters-here';
 
