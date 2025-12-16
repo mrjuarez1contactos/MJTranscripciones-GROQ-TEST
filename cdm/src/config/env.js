@@ -4,6 +4,8 @@ const config = {
     logLevel: process.env.CDM_LOG_LEVEL || 'info',
 
     appScriptUrl: process.env.APPSCRIPT_URL,
+    sheetScriptId: process.env.SHEET_SCRIPT_ID,
+    sheetId: process.env.SHEET_ID,
     appScriptTimeout: parseInt(process.env.APPSCRIPT_TIMEOUT_MS) || 30000,
 
     redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',

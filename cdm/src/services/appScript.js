@@ -4,33 +4,54 @@ const config = require('../config/env');
 
 class AppScriptService {
     constructor() {
-        this.baseUrl = config.appScriptUrl;
+        // Construct the URL if script ID is present, fallback to full URL
+        if (config.sheetScriptId) {
+            this.baseUrl = `https://script.google.com/macros/s/${config.sheetScriptId}/exec`;
+        } else {
+            this.baseUrl = config.appScriptUrl;
+        }
         this.timeout = config.appScriptTimeout;
     }
 
     async call(params, method = 'GET', body = null) {
-        if (!this.baseUrl) throw new Error("APPSCRIPT_URL is not configured");
+        if (!this.baseUrl) throw new Error("APPSCRIPT_URL or SHEET_SCRIPT_ID is not configured");
 
         try {
             const response = await axios({
                 method: method,
                 url: this.baseUrl,
-                params: params, // e.g., { action: 'read' }
+                // If using 'exec' URL, query params control routing in doGet
+                // But for POST, we often put action in body.
+                // Our GAS handles 'action' in query OR body.
+                // We'll put generic params in URL to be safe for redirects.
+                params: params,
                 data: body,
-                timeout: this.timeout,
-                headers: { 'Content-Type': 'application/json' }
+                timeoue: this.timeout,
+                headers: { 'Content-Type': 'application/json' },
+                maxRedirects: 5,
+                // GAS often redirects (302) to googleusercontent. 
+                // Axios follows redirects by default for GET.
+                // For POST, GAS requires following redirects with POST method (Lax)
+                // Axios might switch to GET on 302 unless we specify validation.
+                // Actually GAS for 'exec' usually works fine if we permit redirects.
             });
+
+            if (response.data && response.data.status === 'error') {
+                throw new Error(`GAS Error: ${response.data.message}`);
+            }
 
             return response.data;
         } catch (error) {
             console.error("AppScript Call Error:", error.message);
             if (error.response) {
-                throw new Error(`AppScript responded with ${error.response.status}: ${error.response.statusText}`);
+                // If 404 or similar
+                throw new Error(`AppScript request failed: ${error.response.status}`);
             }
             throw error;
         }
     }
 
+    // --- CACHING HELPERS ---
     async getCachedOrFetch(key, ttl, fetchFn) {
         try {
             const cached = await redisClient.get(key);
@@ -41,10 +62,8 @@ class AppScriptService {
             console.warn("Redis Get Error:", e.message);
         }
 
-        // Fetch from AppScript
         const data = await fetchFn();
 
-        // Cache result
         try {
             if (ttl > 0 && data) {
                 await redisClient.set(key, JSON.stringify(data), { EX: ttl });
@@ -56,44 +75,58 @@ class AppScriptService {
         return { ...data, cached: false };
     }
 
-    async readTranscriptions(userId) {
-        const cacheKey = `transcriptions:list:${userId || 'global'}`; // Assuming per-user list or global? User guide implies per user list if multi-tenant, or global sheet logic. Plan says "cache:transcriptions:list:{user_id}".
+    // --- PUBLIC METHODS ---
 
-        return this.getCachedOrFetch(
-            cacheKey,
-            config.cacheTtl.read,
-            () => this.call({ action: 'read' }) // GAS doGet(action='read')
+    async readTranscriptions(userId) {
+        const cacheKey = `transcriptions:list:${userId || 'global'}`;
+        return this.getCachedOrFetch(cacheKey, config.cacheTtl.read, () =>
+            this.call({ action: 'read' })
         );
     }
 
     async getText(fileId) {
         const cacheKey = `transcription:content:${fileId}`;
-
-        return this.getCachedOrFetch(
-            cacheKey,
-            config.cacheTtl.getText,
-            () => this.call({ action: 'getText', id: fileId }) // GAS doGet(action='getText', id=...)
+        return this.getCachedOrFetch(cacheKey, config.cacheTtl.getText, () =>
+            this.call({ action: 'getText', id: fileId })
         );
     }
 
     async update(id, summary) {
-        // POST to GAS
-        const result = await this.call({ action: 'update' }, 'POST', { id, resumen: summary }); // Pass action in query param implies doGet, but for doPost usually payload has action or query param. Plan says: doPost(e) with action=update. Usually doPost(e) reads e.postData.contents. Let's assume GAS handles it.
-        // Wait, standard GAS `doPost(e)` doesn't parse query params easily if body is used? Actually it does `e.parameter`.
-        // Plan: "POST /api/v1/sheets/update -> Proxea a: doPost(e) del AppScript con action=update" using Body {id, resumen}.
+        const result = await this.call(
+            { action: 'update' }, // query param to route in GAS
+            'POST',
+            { id: id, resumen: summary }
+        );
 
-        // Invalidate caches
+        // Invalidate cache
         try {
             await redisClient.del(`transcription:content:${id}`);
-            // Invalidate list cache? Typically yes. Pattern match deletion is expensive in Redis without SCAN.
-            // For simplicity/safety, maybe just expiry handles it or we rely on dedicated keys.
-            // Plan says: "Invalida cache:transcriptions:list:*"
-            // We can't wildcard delete easily. We will skip wildcard delete for this MVP unless using SCAN logic.
+            // TODO: Smart invalidation of lists
         } catch (e) {
             console.warn("Cache Invalidation Error:", e.message);
         }
-
         return result;
+    }
+
+    async createTranscription(data) {
+        // action='transcripcion' or 'create'
+        return this.call(
+            { action: 'create' },
+            'POST',
+            data // expect { id, file_name, status, ... }
+        );
+    }
+
+    async logEvent(data) {
+        return this.call(
+            { action: 'log' },
+            'POST',
+            data
+        );
+    }
+
+    async getConfig() {
+        return this.call({ action: 'config' });
     }
 }
 
