@@ -19,6 +19,7 @@ from slowapi.errors import RateLimitExceeded
 from groq import Groq
 import google.generativeai as genai
 from dotenv import load_dotenv
+from routes_user import router as user_router
 
 # Load env vars
 load_dotenv()
@@ -294,3 +295,5 @@ RESUMEN NEGOCIO:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Include user routes
+app.include_router(user_router, prefix="/api/user")
